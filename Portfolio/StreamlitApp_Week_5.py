@@ -25,7 +25,6 @@ import shap
 # Setup & Path Configuration
 warnings.simplefilter("ignore")
 
-# Fix path for Streamlit Cloud (ensure 'src' is findable)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, '..'))
 if project_root not in sys.path:
@@ -42,7 +41,7 @@ aws_endpoint_bitcoin = st.secrets["aws_credentials"]["AWS_ENDPOINT"]
 
 
 # AWS Session Management
-@st.cache_resource # Use this to avoid downloading the file every time the page refreshes
+@st.cache_resource
 def get_session(aws_id, aws_secret, aws_token):
     return boto3.Session(
         aws_access_key_id=aws_id,
@@ -53,93 +52,160 @@ def get_session(aws_id, aws_secret, aws_token):
 
 
 session = get_session(aws_id, aws_secret, aws_token)
-
 sm_session = sagemaker.Session(boto_session=session)
 
 # Data & Model Configuration
 df_prices = get_bitcoin_historical_prices()
 
-# Dynamic bounds for Bitcoin model
-MIN_VAL = 0.5 * df_prices.iloc[:, 0].min()
-MAX_VAL = 2.0 * df_prices.iloc[:, 0].max()
-DEFAULT_VAL = df_prices.iloc[:, 0].mean()
+MIN_VAL = 0.5 * df_prices["Close"].min()
+MAX_VAL = 2.0 * df_prices["Close"].max()
+DEFAULT_VAL = df_prices["Close"].mean()
+
+FEATURE_COLS = ["RSI_14", "MACD", "MACD_Signal", "MACD_Hist", "BB_Width", "ROC_10", "EMA_Ratio"]
 
 MODEL_INFO = {
-        "endpoint": aws_endpoint_bitcoin,
-        "explainer": 'explainer_bitcoin.shap',
-        "pipeline": 'finalized_bitcoin_model.tar.gz',
-        "keys": ["Close Price"],
-        "inputs": [{"name": "Close Price", "type": "number", "min": MIN_VAL, "max": MAX_VAL, "default": DEFAULT_VAL, "step": 100.0}]
+    "endpoint": aws_endpoint_bitcoin,
+    "explainer": 'explainer_bitcoin.shap',
+    "pipeline": 'finalized_bitcoin_model.tar.gz',
+    "inputs": [{"name": "Close Price", "type": "number", "min": MIN_VAL, "max": MAX_VAL, "default": DEFAULT_VAL, "step": 100.0}]
 }
 
+
+# Feature Engineering
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def compute_macd(series, fast=12, slow=26, signal=9):
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    histogram = macd - signal_line
+    return macd, signal_line, histogram
+
+def compute_bollinger_band_width(series, window=20, num_std=2):
+    ma = series.rolling(window=window).mean()
+    std = series.rolling(window=window).std()
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    return (upper - lower) / ma
+
+def compute_roc(series, period=10):
+    return series.pct_change(periods=period) * 100
+
+def compute_ema_ratio(series, fast=20, slow=50):
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    return ema_fast / ema_slow
+
+def build_feature_row(df_prices, new_close_price):
+    extended = pd.concat([
+        df_prices[["Close"]],
+        pd.DataFrame([{"Close": new_close_price}])
+    ], ignore_index=True)
+
+    extended["RSI_14"] = compute_rsi(extended["Close"], period=14)
+    macd, sig, hist = compute_macd(extended["Close"])
+    extended["MACD"] = macd
+    extended["MACD_Signal"] = sig
+    extended["MACD_Hist"] = hist
+    extended["BB_Width"] = compute_bollinger_band_width(extended["Close"])
+    extended["ROC_10"] = compute_roc(extended["Close"], period=10)
+    extended["EMA_Ratio"] = compute_ema_ratio(extended["Close"])
+
+    return extended[FEATURE_COLS].dropna()
+
+
+# Model Loading
 def load_pipeline(_session, bucket, key):
     s3_client = _session.client('s3')
-    filename=MODEL_INFO["pipeline"]
+    filename = MODEL_INFO["pipeline"]
 
     s3_client.download_file(
-        Filename=filename, 
-        Bucket=bucket, 
-        Key= f"{key}/{os.path.basename(filename)}")
-        # Extract the .joblib file from the .tar.gz
+        Filename=filename,
+        Bucket=bucket,
+        Key=f"{key}/{os.path.basename(filename)}"
+    )
     with tarfile.open(filename, "r:gz") as tar:
         tar.extractall(path=".")
         joblib_file = [f for f in tar.getnames() if f.endswith('.joblib')][0]
 
-    # Load the full pipeline
     return joblib.load(f"{joblib_file}")
 
 def load_shap_explainer(_session, bucket, key, local_path):
     s3_client = _session.client('s3')
-    local_path = local_path
 
-    # Only download if it doesn't exist locally to save time
     if not os.path.exists(local_path):
         s3_client.download_file(Filename=local_path, Bucket=bucket, Key=key)
-        
+
     with open(local_path, "rb") as f:
         return shap.Explainer.load(f)
 
+
 # Prediction Logic
 def call_model_api(input_df):
-    
     predictor = Predictor(
         endpoint_name=MODEL_INFO["endpoint"],
         sagemaker_session=sm_session,
         serializer=NumpySerializer(),
-        deserializer=NumpyDeserializer() 
+        deserializer=NumpyDeserializer()
     )
-    
+
     try:
-        raw_pred = predictor.predict(input_df)
+        raw_pred = predictor.predict(input_df.values)
         pred_val = pd.DataFrame(raw_pred).values[-1][0]
         mapping = {-1: "SELL", 0: "HOLD", 1: "BUY"}
         return mapping.get(pred_val, pred_val), 200
     except Exception as e:
         return f"Error: {str(e)}", 500
 
+
 # Local Explainability
 def display_explanation(input_df, session, aws_bucket):
     explainer_name = MODEL_INFO["explainer"]
-    explainer = load_shap_explainer(session, aws_bucket, posixpath.join('explainer', explainer_name),os.path.join(tempfile.gettempdir(), explainer_name))
+    explainer = load_shap_explainer(
+        session, aws_bucket,
+        posixpath.join('explainer', explainer_name),
+        os.path.join(tempfile.gettempdir(), explainer_name)
+    )
 
     full_pipeline = load_pipeline(session, aws_bucket, 'sklearn-pipeline-deployment')
-    preprocessing_pipeline = Pipeline(steps=full_pipeline.steps[:-2])
-    input_df_transformed = preprocessing_pipeline.transform(input_df)
-    shap_values = explainer(input_df_transformed)
-    feature_names = full_pipeline[1:4].get_feature_names_out()
+
+    # Rebuild preprocessing pipeline (no SMOTE, no model)
+    preproc_steps = [
+        (name, step) for name, step in full_pipeline.steps
+        if name not in ('sampler', 'model')
+    ]
+    preprocessing_pipeline = Pipeline(steps=preproc_steps)
+    input_transformed = preprocessing_pipeline.transform(input_df)
+
+    # Get selected feature names from SelectKBest mask
+    selector = full_pipeline.named_steps.get("feature_selection")
+    if selector is not None:
+        feature_names = np.array(FEATURE_COLS)[selector.get_support()]
+    else:
+        feature_names = np.array(FEATURE_COLS)
+
+    shap_values = explainer(input_transformed)
 
     exp = shap.Explanation(
-        values=shap_values[0, :, 0],       # The matrix of SHAP values
-        base_values=explainer.expected_value[0], # The intercept/base value
-        data=input_df_transformed[0],        # The actual feature values for that user
-        feature_names=feature_names        # Your list of names
-        )
+        values=shap_values[-1, :, 0],
+        base_values=explainer.expected_value[0],
+        data=input_transformed[-1],
+        feature_names=list(feature_names)
+    )
 
     st.subheader("🔍 Decision Transparency (SHAP)")
     fig, ax = plt.subplots(figsize=(10, 4))
     shap.plots.waterfall(exp)
     st.pyplot(fig)
-    # top feature   
+
     top_feature = pd.Series(exp.values, index=exp.feature_names).abs().idxmax()
     st.info(f"**Business Insight:** The most influential factor in this decision was **{top_feature}**.")
 
@@ -148,32 +214,28 @@ def display_explanation(input_df, session, aws_bucket):
 st.set_page_config(page_title="ML Deployment Compiler", layout="wide")
 st.title("👨‍💻 ML Deployment Compiler")
 
-
 with st.form("pred_form"):
-    st.subheader(f"Inputs")
+    st.subheader("Inputs")
     cols = st.columns(2)
     user_inputs = {}
-    
+
     for i, inp in enumerate(MODEL_INFO["inputs"]):
         with cols[i % 2]:
             user_inputs[inp['name']] = st.number_input(
                 inp['name'].replace('_', ' ').upper(),
-                min_value=inp['min'], max_value=inp['max'], value=inp['default'], step=inp['step']
+                min_value=inp['min'], max_value=inp['max'],
+                value=inp['default'], step=inp['step']
             )
-    
+
     submitted = st.form_submit_button("Run Prediction")
 
 if submitted:
+    input_df = build_feature_row(df_prices, user_inputs["Close Price"])
 
-    data_row = [user_inputs[k] for k in MODEL_INFO["keys"]]
-    # Prepare data (Stock predictor uses df_features, Bitcoin uses df_prices)
-    base_df = df_prices
-    input_df = pd.concat([base_df, pd.DataFrame([data_row], columns=base_df.columns)])
-    
     res, status = call_model_api(input_df)
     if status == 200:
         st.metric("Prediction Result", res)
-        display_explanation(input_df,session, aws_bucket)
+        display_explanation(input_df, session, aws_bucket)
     else:
         st.error(res)
 
