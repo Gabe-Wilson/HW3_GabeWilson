@@ -57,10 +57,10 @@ df_features = extract_features()
 
 MODEL_INFO = {
         "endpoint": aws_endpoint,
-        "explainer": 'explainer.shap',
-        "pipeline": 'finalized_model.tar.gz',
-        "keys": ["GOOGL", "IBM", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"],
-        "inputs": [{"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01} for k in ["GOOGL", "IBM", "DEXJPUS", "DEXUSUK", "SP500", "DJIA", "VIXCLS"]]
+        "explainer": 'explainer_pca.shap',
+        "pipeline": 'finalized_pca_model.tar.gz',
+        "keys": ["TXN"],
+        "inputs": [{"name": k, "type": "number", "min": -1.0, "max": 1.0, "default": 0.0, "step": 0.01} for k in ["TXN"]]
 }
 
 def load_pipeline(_session, bucket, key):
