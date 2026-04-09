@@ -10,6 +10,7 @@ shap==0.49.1
 openai
 yfinance
 pandas_datareader
+setuptools
 streamlit
 pandas>=2.0.3,<3.0.0
 imbalanced-learn==0.11.0
