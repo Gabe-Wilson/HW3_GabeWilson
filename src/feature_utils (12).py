@@ -131,7 +131,7 @@ def convert_input_pca_regression(request_body, request_content_type):
         AVY_CR_Cum = json.loads(request_body)[SP500_2]
 
         X = np.log(dataset.drop([target],axis=1)).diff(return_period)
-        X = np.exp(X).cumsum()
+        X = np.exp(X).cumprod()
         X.columns = [name + "_CR_Cum" for name in X.columns]
         
         # Calculate the distance
