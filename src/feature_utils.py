@@ -19,8 +19,8 @@ def extract_features():
     START_DATE = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     END_DATE = datetime.date.today().strftime("%Y-%m-%d")
     stk_tickers = ['TXN', 'HON', 'AVY']
-    # ccy_tickers = ['DEXJPUS', 'DEXUSUK']
-    # idx_tickers = ['SP500', 'DJIA', 'VIXCLS']
+    ccy_tickers = ['DEXJPUS', 'DEXUSUK']
+    idx_tickers = ['SP500', 'DJIA', 'VIXCLS']
     
     stk_data = yf.download(stk_tickers, start=START_DATE, end=END_DATE, auto_adjust=False)
     #stk_data = web.DataReader(stk_tickers, 'yahoo')
