@@ -105,7 +105,7 @@ def convert_input_pca_regression(request_body, request_content_type):
 
     target = 'TXN'
 
-    option = 2
+    option = 1
 
     if option == 2:
 
