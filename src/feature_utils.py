@@ -18,19 +18,19 @@ def extract_features():
     
     START_DATE = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     END_DATE = datetime.date.today().strftime("%Y-%m-%d")
-    stk_tickers = ['MSFT', 'IBM', 'GOOGL']
-    ccy_tickers = ['DEXJPUS', 'DEXUSUK']
-    idx_tickers = ['SP500', 'DJIA', 'VIXCLS']
+    stk_tickers = ['TXN', 'HON', 'AVY']
+    # ccy_tickers = ['DEXJPUS', 'DEXUSUK']
+    # idx_tickers = ['SP500', 'DJIA', 'VIXCLS']
     
     stk_data = yf.download(stk_tickers, start=START_DATE, end=END_DATE, auto_adjust=False)
     #stk_data = web.DataReader(stk_tickers, 'yahoo')
     ccy_data = web.DataReader(ccy_tickers, 'fred', start=START_DATE, end=END_DATE)
     idx_data = web.DataReader(idx_tickers, 'fred', start=START_DATE, end=END_DATE)
 
-    Y = np.log(stk_data.loc[:, ('Adj Close', 'MSFT')]).diff(return_period).shift(-return_period)
+    Y = np.log(stk_data.loc[:, ('Adj Close', 'TXN')]).diff(return_period).shift(-return_period)
     Y.name = Y.name[-1]+'_Future'
     
-    X1 = np.log(stk_data.loc[:, ('Adj Close', ('GOOGL', 'IBM'))]).diff(return_period)
+    X1 = np.log(stk_data.loc[:, ('Adj Close', ('HON', 'AVY'))]).diff(return_period)
     X1.columns = X1.columns.droplevel()
     X2 = np.log(ccy_data).diff(return_period)
     X3 = np.log(idx_data).diff(return_period)
@@ -125,26 +125,26 @@ def convert_input_pca_regression(request_body, request_content_type):
 
         return_period = 5
 
-        SP500_1 = 'DXCM_CR'
+        SP500_1 = 'HON_CR_CUM'
         DXCM_CR = json.loads(request_body)[SP500_1]
-        SP500_2 = 'SYF_CR'
+        SP500_2 = 'AVY_CR_CUM'
         SYF_CR = json.loads(request_body)[SP500_2]
 
         X = np.log(dataset.drop([target],axis=1)).diff(return_period)
-        X = np.exp(X).cumsum()
+        X = np.exp(X).cumprod()
         X.columns = [name + "_CR" for name in X.columns]
 
         # Calculate the distance
         distances = np.sqrt(
-            (X[SP500_1] - DXCM_CR)**2 + 
-            (X[SP500_2] - SYF_CR)**2
+            (X[SP500_1] - HON_CR_CUM)**2 + 
+            (X[SP500_2] - AVY_CR_CUM)**2
         )
         
         closest_index = distances.idxmin()
         closest_row = X.loc[[closest_index]]
     
-        closest_row[SP500_1] = DXCM_CR
-        closest_row[SP500_2] = SYF_CR
+        closest_row[SP500_1] = HON_CR_CUM
+        closest_row[SP500_2] = AVY_CR_CUM
 
         return closest_row
     
