@@ -10,22 +10,30 @@ import sys
 import json #
 
 from src.Custom_Classes import FeatureEngineer
-
+import time
 
 def extract_features():
-
     return_period = 5
-    
     START_DATE = (datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
     END_DATE = datetime.date.today().strftime("%Y-%m-%d")
     stk_tickers = ['TXN', 'HON', 'AVY']
     ccy_tickers = ['DEXJPUS', 'DEXUSUK']
     idx_tickers = ['SP500', 'DJIA', 'VIXCLS']
-    
-    stk_data = yf.download(stk_tickers, start=START_DATE, end=END_DATE, auto_adjust=False)
-    #stk_data = web.DataReader(stk_tickers, 'yahoo')
+
+    # Retry yfinance up to 3 times with a delay
+    for attempt in range(3):
+        stk_data = yf.download(stk_tickers, start=START_DATE, end=END_DATE, auto_adjust=False)
+        missing = [t for t in stk_tickers if t not in stk_data['Adj Close'].columns]
+        if not missing:
+            break
+        time.sleep(5)
+    else:
+        raise RuntimeError(f"Could not download ticker data after 3 attempts. Missing: {missing}")
+
     ccy_data = web.DataReader(ccy_tickers, 'fred', start=START_DATE, end=END_DATE)
     idx_data = web.DataReader(idx_tickers, 'fred', start=START_DATE, end=END_DATE)
+    # ... rest of function unchanged
+
 
     Y = np.log(stk_data.loc[:, ('Adj Close', 'TXN')]).diff(return_period).shift(-return_period)
     Y.name = Y.name[-1]+'_Future'
